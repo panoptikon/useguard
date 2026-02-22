@@ -9,8 +9,8 @@ export function registerChartTools(server: MCPServer) {
       name: "posthog-trend-chart",
       description:
         "Query PostHog for trend data and display it as an interactive line chart. " +
-        "Executes a TrendsQuery via PostHog's query-run tool. " +
-        "Provide one or more event names to chart over time.",
+        "IMPORTANT: First call posthog-event-definitions to discover exact event names, " +
+        "then pass those names here. Do not guess event names.",
       schema: z.object({
         events: z
           .array(

@@ -67,7 +67,8 @@ export function registerEventsTools(server: MCPServer) {
     {
       name: "posthog-event-definitions",
       description:
-        "List all event definitions tracked in PostHog, including event names and metadata.",
+        "List all event definitions tracked in PostHog. Returns exact event names (e.g. '$pageview', 'user signed up') " +
+        "that can be used with posthog-trend-chart and other query tools. Call this first before charting.",
       schema: z.object({
         search: z
           .string()
