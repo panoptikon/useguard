@@ -78,7 +78,7 @@ export function registerEventsTools(server: MCPServer) {
     },
     async ({ search }) => {
       try {
-        const args: Record<string, unknown> = {};
+        const args: Record<string, unknown> = { limit: 100 };
         if (search) args.search = search;
         const result = await callPostHogTool("event-definitions-list", args);
         if (isPostHogError(result)) return error(result.message);

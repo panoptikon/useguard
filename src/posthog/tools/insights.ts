@@ -23,9 +23,8 @@ export function registerInsightsTools(server: MCPServer) {
     },
     async ({ search, limit }) => {
       try {
-        const args: Record<string, unknown> = {};
+        const args: Record<string, unknown> = { limit: limit ?? 100 };
         if (search) args.search = search;
-        if (limit) args.limit = limit;
         const result = await callPostHogTool("insights-get-all", args);
         if (isPostHogError(result)) return error(result.message);
         return object(result);
