@@ -5,6 +5,7 @@ import { registerPersonsTools } from "./persons.js";
 import { registerCohortsTools } from "./cohorts.js";
 import { registerFeatureFlagsTools } from "./feature-flags.js";
 import { registerHogQLTools } from "./hogql.js";
+import { registerChartTools } from "./chart.js";
 
 export function registerPostHogTools(server: MCPServer) {
   registerEventsTools(server);
@@ -13,4 +14,5 @@ export function registerPostHogTools(server: MCPServer) {
   registerCohortsTools(server);
   registerFeatureFlagsTools(server);
   registerHogQLTools(server);
+  registerChartTools(server);
 }
