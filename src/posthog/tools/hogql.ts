@@ -8,45 +8,31 @@ export function registerHogQLTools(server: MCPServer) {
     {
       name: "posthog-execute-sql",
       description:
-        "Execute a raw SQL query directly against the PostHog database. Use for advanced analytics queries.",
+        "Execute a HogQL SQL query against PostHog data. Use for advanced analytics queries.",
       schema: z.object({
         query: z
           .string()
-          .describe("The SQL query to execute"),
+          .describe("The HogQL SQL query to execute"),
       }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ query }) => {
       try {
-        const result = await callPostHogTool("execute-sql", { query });
+        const result = await callPostHogTool("query-run", {
+          query: {
+            kind: "DataVisualizationNode",
+            source: {
+              kind: "HogQLQuery",
+              query,
+            },
+          },
+        });
         if (isPostHogError(result)) return error(result.message);
         return object(result);
       } catch (err) {
         console.error("posthog-execute-sql failed:", err);
         return error(
           `SQL query failed: ${err instanceof Error ? err.message : "Unknown error"}`
-        );
-      }
-    }
-  );
-
-  server.tool(
-    {
-      name: "posthog-read-schema",
-      description:
-        "Read the PostHog data schema to understand available tables and columns. Useful before writing SQL queries.",
-      schema: z.object({}),
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    async () => {
-      try {
-        const result = await callPostHogTool("read-data-schema", {});
-        if (isPostHogError(result)) return error(result.message);
-        return object(result);
-      } catch (err) {
-        console.error("posthog-read-schema failed:", err);
-        return error(
-          `Failed to read schema: ${err instanceof Error ? err.message : "Unknown error"}`
         );
       }
     }

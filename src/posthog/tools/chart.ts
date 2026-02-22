@@ -8,19 +8,38 @@ export function registerChartTools(server: MCPServer) {
     {
       name: "posthog-trend-chart",
       description:
-        "Execute a HogQL SQL query against PostHog and display the results as an interactive line chart. " +
-        "The query MUST return a date/time column and one or more numeric columns. " +
-        "Example: SELECT toDate(timestamp) AS date, count() AS pageviews FROM events WHERE event = '$pageview' AND timestamp > now() - INTERVAL 30 DAY GROUP BY date ORDER BY date",
+        "Query PostHog for trend data and display it as an interactive line chart. " +
+        "Executes a TrendsQuery via PostHog's query-run tool. " +
+        "Provide one or more event names to chart over time.",
       schema: z.object({
-        query: z
+        events: z
+          .array(
+            z.object({
+              event: z.string().describe("Event name (e.g. '$pageview', 'user signed up')"),
+              label: z.string().optional().describe("Display label for this series"),
+              math: z
+                .enum(["total", "dau", "weekly_active", "monthly_active", "unique_session"])
+                .optional()
+                .describe("Aggregation method (default: total)"),
+            })
+          )
+          .describe("Events to chart"),
+        date_from: z
           .string()
-          .describe(
-            "HogQL SQL query that returns a date column and numeric value columns for charting"
-          ),
+          .optional()
+          .describe("Start date (e.g. '-30d', '-7d', '2024-01-01'). Default: -7d"),
+        date_to: z
+          .string()
+          .optional()
+          .describe("End date (e.g. '-1d', '2024-12-31'). Default: now"),
+        interval: z
+          .enum(["hour", "day", "week", "month"])
+          .optional()
+          .describe("Time bucket interval (default: day)"),
         title: z
           .string()
           .optional()
-          .describe("Chart title (defaults to the query)"),
+          .describe("Chart title"),
       }),
       annotations: { readOnlyHint: true, openWorldHint: true },
       widget: {
@@ -29,21 +48,43 @@ export function registerChartTools(server: MCPServer) {
         invoked: "Chart ready",
       },
     },
-    async ({ query, title }) => {
+    async ({ events, date_from, date_to, interval, title }) => {
       try {
-        const result = await callPostHogTool("execute-sql", { query });
+        const query = {
+          kind: "InsightVizNode" as const,
+          source: {
+            kind: "TrendsQuery" as const,
+            dateRange: {
+              date_from: date_from ?? "-7d",
+              ...(date_to ? { date_to } : {}),
+            },
+            interval: interval ?? "day",
+            series: events.map((e) => ({
+              kind: "EventsNode" as const,
+              event: e.event,
+              custom_name: e.label ?? e.event,
+              math: e.math ?? "total",
+            })),
+          },
+        };
+
+        const result = await callPostHogTool("query-run", { query });
         if (isPostHogError(result)) return error(result.message);
 
-        const series = parseColumnarResult(result);
+        // The response comes as { text: "..." } with a YAML-like format
+        const responseText =
+          typeof result.text === "string" ? result.text : JSON.stringify(result);
+
+        const series = parseTrendResponse(responseText);
 
         if (series.length === 0) {
-          const preview = JSON.stringify(result).slice(0, 300);
           return error(
-            `Could not parse chart data. The query must return a date column and at least one numeric column. Response: ${preview}`
+            `No chartable data found. Response preview: ${responseText.slice(0, 300)}`
           );
         }
 
-        const chartTitle = title ?? query.slice(0, 80);
+        const chartTitle =
+          title ?? events.map((e) => e.label ?? e.event).join(", ");
 
         return widget({
           props: {
@@ -51,7 +92,7 @@ export function registerChartTools(server: MCPServer) {
             series,
           },
           output: text(
-            `Trend chart: "${chartTitle}" — ${series.length} series, ${series[0]?.data.length ?? 0} data points.\nSQL: ${query}`
+            `Trend chart: "${chartTitle}" — ${series.length} series, ${series[0]?.data.length ?? 0} data points each.`
           ),
         });
       } catch (err) {
@@ -74,60 +115,45 @@ interface Series {
   data: SeriesPoint[];
 }
 
-function parseColumnarResult(result: Record<string, unknown>): Series[] {
-  const columns = result.columns as string[] | undefined;
-  const rows = (result.results ?? result.rows) as unknown[][] | undefined;
-
-  if (!Array.isArray(columns) || !Array.isArray(rows) || rows.length === 0) {
-    return [];
-  }
-
-  const dateColIdx = findDateColumnIndex(columns, rows);
-  if (dateColIdx === -1) return [];
-
-  return buildSeries(columns, rows, dateColIdx);
-}
-
-function findDateColumnIndex(columns: string[], rows: unknown[][]): number {
-  const idx = columns.findIndex((c) =>
-    /^(date|day|week|month|time|timestamp|created_at|interval_start|hour)$/i.test(c)
-  );
-  if (idx !== -1) return idx;
-
-  if (rows.length > 0 && looksLikeDate(String(rows[0][0]))) {
-    return 0;
-  }
-
-  return -1;
-}
-
-function buildSeries(
-  columns: string[],
-  rows: unknown[][],
-  dateColIdx: number
-): Series[] {
+/**
+ * Parse the YAML-like text response from PostHog query-run TrendsQuery.
+ *
+ * The response contains blocks like:
+ *   - data[8]: 0,0,177,178,63,274,308,71
+ *     days[8]: 2026-02-14,2026-02-15,...
+ *     label: $pageview
+ */
+function parseTrendResponse(text: string): Series[] {
   const series: Series[] = [];
 
-  for (let i = 0; i < columns.length; i++) {
-    if (i === dateColIdx) continue;
-    const firstVal = rows[0]?.[i];
-    if (
-      typeof firstVal === "number" ||
-      (typeof firstVal === "string" && !isNaN(Number(firstVal)))
-    ) {
-      series.push({
-        name: columns[i],
-        data: rows.map((row) => ({
-          date: String(row[dateColIdx]),
-          value: Number(row[i]) || 0,
-        })),
-      });
+  // Split into result blocks — each starts with "- data["
+  const blocks = text.split(/\n\s*- data\[/);
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = "data[" + blocks[i];
+
+    // Extract data values
+    const dataMatch = block.match(/data\[\d+\]:\s*([^\n]+)/);
+    const daysMatch = block.match(/days\[\d+\]:\s*([^\n]+)/);
+    const labelMatch = block.match(/label:\s*([^\n]+)/);
+    const customNameMatch = block.match(/custom_name:\s*([^\n]+)/);
+
+    if (dataMatch && daysMatch) {
+      const values = dataMatch[1].split(",").map((v) => Number(v.trim()));
+      const days = daysMatch[1].split(",").map((d) => d.trim());
+      const name = customNameMatch?.[1]?.trim() ?? labelMatch?.[1]?.trim() ?? "Value";
+
+      if (values.length === days.length && values.length > 0) {
+        series.push({
+          name,
+          data: days.map((date, idx) => ({
+            date,
+            value: values[idx] ?? 0,
+          })),
+        });
+      }
     }
   }
 
   return series;
-}
-
-function looksLikeDate(val: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}/.test(val) || !isNaN(Date.parse(val));
 }
