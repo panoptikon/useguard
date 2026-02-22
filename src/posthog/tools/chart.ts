@@ -42,10 +42,10 @@ export function registerChartTools(server: MCPServer) {
         const series = parseResponse(result);
 
         if (series.length === 0) {
-          // Return the raw response as debug info so we can understand the shape
+          // Include truncated raw response so we can debug the shape
+          const preview = JSON.stringify(result).slice(0, 500);
           return error(
-            `No chartable time-series data found. Response keys: [${Object.keys(result).join(", ")}]. ` +
-            `Try a question that produces date + count data, e.g. 'Show me daily $pageview count over the last 30 days'.`
+            `No chartable time-series data found. Response preview: ${preview}`
           );
         }
 
